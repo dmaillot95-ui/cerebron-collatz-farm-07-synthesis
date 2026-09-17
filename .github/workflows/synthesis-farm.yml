@@ -1,0 +1,121 @@
+name: CEREBRON Collatz Farm 07 Synthesis C256
+
+on:
+  push:
+    paths:
+      - '.github/workflows/synthesis-farm.yml'
+      - 'mission/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          R=[
+          ('CLAIM_NORMALIZER','llama3b','llama-3.2','normalize claims and hypotheses'),
+          ('PROVENANCE_TRACKER','gemma9b','gemma-2','track source farms and dependencies'),
+          ('THEORY_INTEGRATOR','gemma9b','gemma-2','integrate theory outputs conservatively'),
+          ('DYNAMICS_INTEGRATOR','llama3b','llama-3.2','integrate dynamics outputs conservatively'),
+          ('ADIC_INTEGRATOR','gemma9b','gemma-2','integrate 2/3-adic outputs conservatively'),
+          ('COUNTEREXAMPLE_INTEGRATOR','llama3b','llama-3.2','promote verified refutations and adversarial families'),
+          ('LITERATURE_INTEGRATOR','gemma9b','gemma-2','map literature evidence to internal claims'),
+          ('FORMAL_AUDIT_INTEGRATOR','gemma9b','gemma-2','apply audit verdicts to candidate claims'),
+          ('DEPENDENCY_ANALYST','llama3b','llama-3.2','detect correlated reasoning and shared assumptions'),
+          ('CONTRADICTION_RESOLVER','gemma9b','gemma-2','isolate contradictions without averaging them away'),
+          ('PROOF_CHAIN_COMPILER','gemma9b','gemma-2','compile only complete justified inference chains'),
+          ('GAP_EXTRACTOR','llama3b','llama-3.2','identify smallest residual mathematical gap'),
+          ('ARBITRARY_N_CHECKER','gemma9b','gemma-2','check whether any claim truly covers arbitrary N'),
+          ('GLOBAL_DIVISIBILITY_CHECKER','llama3b','llama-3.2','focus on D=2^A-3^N divides C_N closure condition'),
+          ('REAL_ADIC_BRIDGE_SYNTHESIZER','gemma9b','gemma-2','merge real and adic compatibility constraints'),
+          ('FALSIFICATION_PLANNER','llama3b','llama-3.2','design next decisive tests/lemmas'),
+          ('REPLICATOR','gemma9b','gemma-2','independent reconstruction of strongest surviving claim'),
+          ('COUNTER_AUDITOR','llama3b','llama-3.2','attack the integrated synthesis'),
+          ('OMEGA_SYNTHESIZER','gemma9b','gemma-2','compress surviving results and residuals'),
+          ('FINAL_JUDGE','gemma9b','gemma-2','classify PROVED/REFUTED/HOLD/UNKNOWN and keep CYCLES OPEN unless fully justified')]
+          print('matrix='+json.dumps({'include':[{'role':r,'model_id':m,'family':f,'focus':x} for r,m,f,x in R]},separators=(',',':')))
+          PY
+
+  synthesis-agent:
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install --quiet hf-gradio
+      - name: Execute synthesis agent
+        env:
+          ROLE: ${{ matrix.role }}
+          MODEL_ID: ${{ matrix.model_id }}
+          FAMILY: ${{ matrix.family }}
+          FOCUS: ${{ matrix.focus }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python - <<'PY'
+          import json,os,importlib.util,hashlib
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location('fw','worker/farm_worker.py'); fw=importlib.util.module_from_spec(spec); spec.loader.exec_module(fw)
+          reg={'llama3b':'huggingface-projects/llama-3.2-3B-Instruct','gemma9b':'huggingface-projects/gemma-2-9b-it'}
+          role=os.environ['ROLE']; mid=os.environ['MODEL_ID']; fam=os.environ['FAMILY']; focus=os.environ['FOCUS']
+          mission=Path('mission/C256-SYNTHESIS-FARM.md').read_text()
+          prompt=f'''CEREBRON OMEGA — COLLATZ FARM 07 SYNTHESIS\nROLE: {role}\nFOCUS: {focus}\n\n{mission}\n\nIMPORTANT: This repository does not yet contain the live artifacts from farms 01-06. Therefore do NOT invent their contents. Work only from the checkpoint stated in the mission and produce a synthesis protocol, consistency analysis, or conditional integration result. Mark unavailable farm-specific evidence as UNKNOWN/HOLD. CLAIM<=EVIDENCE. CONSENSUS!=TRUTH. No CYCLES CLOSED without arbitrary-N proof.'''
+          ok,text,meta=fw.invoke(reg[mid],prompt)
+          result={'schema':'cerebron-synthesis-farm-c256-v1','role':role,'model_id':mid,'model_family':fam,'ok':bool(ok),'response':text if ok else None,'response_sha256':hashlib.sha256(text.encode()).hexdigest() if ok and text else None,'meta':meta,'evidence_status':'UNREVIEWED_EXTERNAL_AGENT_OUTPUT' if ok else 'NO_EXTERNAL_OUTPUT'}
+          Path('out/result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthesis-c256-${{ matrix.role }}
+          path: out/result.json
+          retention-days: 14
+
+  omega-fusion:
+    needs: synthesis-agent
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: synthesis-c256-*
+          path: results
+          merge-multiple: false
+      - shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          rows=[]
+          for p in Path('results').rglob('result.json'):
+            try: rows.append(json.loads(p.read_text()))
+            except: pass
+          ok=[r for r in rows if r.get('ok')]
+          acct={'schema':'cerebron-synthesis-c256-omega-v1','artifact_rows':len(rows),'successful_external_ai_calls':len(ok),'successful_model_families':sorted({r.get('model_family') for r in ok}),'successful_roles':sorted({r.get('role') for r in ok}),'source_artifacts_01_06_present':False,'claim_note':'Protocol-level synthesis only until artifacts from farms 01-06 are imported and audited.'}
+          Path('synthesis-c256-accounting.json').write_text(json.dumps(acct,ensure_ascii=False,indent=2)+'\n')
+          Path('synthesis-c256-packet.txt').write_text('\n\n'.join('ROLE '+str(r.get('role'))+' | '+str(r.get('model_family'))+'\n'+str(r.get('response') or '') for r in ok))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthesis-c256-omega-packet
+          path: |
+            synthesis-c256-accounting.json
+            synthesis-c256-packet.txt
+          retention-days: 14
