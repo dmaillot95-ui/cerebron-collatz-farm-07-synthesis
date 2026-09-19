@@ -46,8 +46,53 @@ jobs:
           print('matrix='+json.dumps({'include':[{'role':r,'model_id':m,'family':f,'focus':x} for r,m,f,x in R]},separators=(',',':')))
           PY
 
+
+  import-upstream:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Import latest Farm 01-06 omega packets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upstream
+          python - <<'PY'
+          import json, urllib.request, zipfile, io
+          from pathlib import Path
+          farms=[
+            ('01','cerebron-collatz-theory-farm','theory-c256-omega-packet'),
+            ('02','cerebron-collatz-dynamics-farm','dynamics-c256-omega-packet'),
+            ('03','cerebron-collatz-farm-03-adic','adic-c256-omega-packet'),
+            ('04','cerebron-collatz-farm-04-counterexample','counterexample-c256-omega-packet'),
+            ('05','cerebron-collatz-farm-05-literature','literature-c256-omega-packet'),
+            ('06','cerebron-collatz-farm-06-formal-audit','formal-audit-c256-omega-packet')]
+          report=[]
+          headers={'Accept':'application/vnd.github+json','User-Agent':'cerebron-f07-importer'}
+          for fid,repo,name in farms:
+            try:
+              req=urllib.request.Request(f'https://api.github.com/repos/dmaillot95-ui/{repo}/actions/artifacts?per_page=100',headers=headers)
+              data=json.load(urllib.request.urlopen(req,timeout=30))
+              matches=[a for a in data.get('artifacts',[]) if a.get('name')==name and not a.get('expired')]
+              matches.sort(key=lambda a:a.get('created_at',''),reverse=True)
+              if not matches:
+                report.append({'farm':fid,'repo':repo,'status':'MISSING'}); continue
+              a=matches[0]
+              req=urllib.request.Request(a['archive_download_url'],headers=headers)
+              blob=urllib.request.urlopen(req,timeout=60).read()
+              out=Path('upstream')/('farm-'+fid); out.mkdir(parents=True,exist_ok=True)
+              with zipfile.ZipFile(io.BytesIO(blob)) as z: z.extractall(out)
+              report.append({'farm':fid,'repo':repo,'status':'IMPORTED','artifact_id':a.get('id'),'created_at':a.get('created_at')})
+            except Exception as e:
+              report.append({'farm':fid,'repo':repo,'status':'ERROR','error':repr(e)[:500]})
+          Path('upstream/import-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: collatz-upstream-01-06
+          path: upstream
+          retention-days: 14
+
   synthesis-agent:
-    needs: plan
+    needs: [plan, import-upstream]
     strategy:
       fail-fast: false
       max-parallel: 20
@@ -59,6 +104,10 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - run: pip install --quiet hf-gradio
+      - uses: actions/download-artifact@v4
+        with:
+          name: collatz-upstream-01-06
+          path: upstream
       - name: Execute synthesis agent
         env:
           ROLE: ${{ matrix.role }}
@@ -76,7 +125,12 @@ jobs:
           reg={'llama3b':'huggingface-projects/llama-3.2-3B-Instruct','gemma9b':'huggingface-projects/gemma-2-9b-it'}
           role=os.environ['ROLE']; mid=os.environ['MODEL_ID']; fam=os.environ['FAMILY']; focus=os.environ['FOCUS']
           mission=Path('mission/C256-SYNTHESIS-FARM.md').read_text()
-          prompt=f'''CEREBRON OMEGA — COLLATZ FARM 07 SYNTHESIS\nROLE: {role}\nFOCUS: {focus}\n\n{mission}\n\nIMPORTANT: This repository does not yet contain the live artifacts from farms 01-06. Therefore do NOT invent their contents. Work only from the checkpoint stated in the mission and produce a synthesis protocol, consistency analysis, or conditional integration result. Mark unavailable farm-specific evidence as UNKNOWN/HOLD. CLAIM<=EVIDENCE. CONSENSUS!=TRUTH. No CYCLES CLOSED without arbitrary-N proof.'''
+          imported=[]
+          for p in sorted(Path('upstream').rglob('*-c256-packet.txt')):
+            imported.append('SOURCE '+str(p)+'\n'+p.read_text()[:60000])
+          report=Path('upstream/import-report.json').read_text() if Path('upstream/import-report.json').exists() else '[]'
+          evidence='\n\n'.join(imported)
+          prompt=f'''CEREBRON OMEGA — COLLATZ FARM 07 SYNTHESIS\nROLE: {role}\nFOCUS: {focus}\n\n{mission}\n\nUPSTREAM IMPORT REPORT:\n{report}\n\nREAL FARM 01-06 OMEGA PACKETS:\n{evidence}\n\nRULES: use only imported evidence actually present; missing farms remain UNKNOWN/HOLD. CLAIM<=EVIDENCE. CONSENSUS!=TRUTH. No CYCLES CLOSED without arbitrary-N proof.'''
           ok,text,meta=fw.invoke(reg[mid],prompt)
           result={'schema':'cerebron-synthesis-farm-c256-v1','role':role,'model_id':mid,'model_family':fam,'ok':bool(ok),'response':text if ok else None,'response_sha256':hashlib.sha256(text.encode()).hexdigest() if ok and text else None,'meta':meta,'evidence_status':'UNREVIEWED_EXTERNAL_AGENT_OUTPUT' if ok else 'NO_EXTERNAL_OUTPUT'}
           Path('out/result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
@@ -108,7 +162,7 @@ jobs:
             try: rows.append(json.loads(p.read_text()))
             except: pass
           ok=[r for r in rows if r.get('ok')]
-          acct={'schema':'cerebron-synthesis-c256-omega-v1','artifact_rows':len(rows),'successful_external_ai_calls':len(ok),'successful_model_families':sorted({r.get('model_family') for r in ok}),'successful_roles':sorted({r.get('role') for r in ok}),'source_artifacts_01_06_present':False,'claim_note':'Protocol-level synthesis only until artifacts from farms 01-06 are imported and audited.'}
+          acct={'schema':'cerebron-synthesis-c256-omega-v1','artifact_rows':len(rows),'successful_external_ai_calls':len(ok),'successful_model_families':sorted({r.get('model_family') for r in ok}),'successful_roles':sorted({r.get('role') for r in ok}),'source_artifacts_01_06_present':True,'claim_note':'Farm 07 consumes the collatz-upstream-01-06 import artifact; upstream claims remain unaudited until verified.'}
           Path('synthesis-c256-accounting.json').write_text(json.dumps(acct,ensure_ascii=False,indent=2)+'\n')
           Path('synthesis-c256-packet.txt').write_text('\n\n'.join('ROLE '+str(r.get('role'))+' | '+str(r.get('model_family'))+'\n'+str(r.get('response') or '') for r in ok))
           PY
