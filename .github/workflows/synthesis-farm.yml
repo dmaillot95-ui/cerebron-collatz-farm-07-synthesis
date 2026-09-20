@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   plan:
@@ -164,9 +165,11 @@ jobs:
             try: rows.append(json.loads(p.read_text()))
             except: pass
           ok=[r for r in rows if r.get('ok')]
-          acct={'schema':'cerebron-synthesis-c256-omega-v1','artifact_rows':len(rows),'successful_external_ai_calls':len(ok),'successful_model_families':sorted({r.get('model_family') for r in ok}),'successful_roles':sorted({r.get('role') for r in ok}),'source_artifacts_01_06_present':True,'claim_note':'Farm 07 consumes the collatz-upstream-01-06 import artifact; upstream claims remain unaudited until verified.'}
+          acct={'schema':'cerebron-synthesis-c256-omega-v1','artifact_rows':len(rows),'successful_external_ai_calls':len(ok),'successful_model_families':sorted({r.get('model_family') for r in ok}),'successful_roles':sorted({r.get('role') for r in ok}),'source_artifacts_01_06_present':True,'claim_note':'Farm 07 consumes the collatz-upstream-01-06 import artifact; upstream claims remain unaudited until verified.','omega_signature_policy':'Consensus is not proof. Count independent evidence lineages, derivation diversity, reproduction and counter-audit before assigning strength.'}
           Path('synthesis-c256-accounting.json').write_text(json.dumps(acct,ensure_ascii=False,indent=2)+'\n')
           Path('synthesis-c256-packet.txt').write_text('\n\n'.join('ROLE '+str(r.get('role'))+' | '+str(r.get('model_family'))+'\n'+str(r.get('response') or '') for r in ok))
+          sig={'schema':'cerebron-omega-signature-v1','status':'MEASUREMENT_PENDING','rule':'CONSENSUS != PROOF','successful_roles':len(ok),'model_families':sorted({r.get('model_family') for r in ok}),'required_before_strong_signature':['distinct derivation fingerprints','dependency audit','counter-audit','independent reproduction'],'nextlock':'extract strongest common claim and test whether its derivations are genuinely independent'}
+          Path('omega-signature.json').write_text(json.dumps(sig,ensure_ascii=False,indent=2)+'\n')
           PY
       - uses: actions/upload-artifact@v4
         with:
@@ -174,4 +177,5 @@ jobs:
           path: |
             synthesis-c256-accounting.json
             synthesis-c256-packet.txt
+            omega-signature.json
           retention-days: 14
