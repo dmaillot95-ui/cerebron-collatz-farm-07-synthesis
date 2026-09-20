@@ -1,6 +1,8 @@
 name: CEREBRON Collatz Farm 07 Synthesis C256
 
 on:
+  schedule:
+    - cron: '*/15 * * * *'
   push:
     paths:
       - '.github/workflows/synthesis-farm.yml'
